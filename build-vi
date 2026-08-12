@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Wrapper to run build_vi.py using a project virtualenv if present.
+set -e
+# set this to wherever you want to store your cluster env files.  The default is /home/ubuntu/.proxmox
+export PROXMOX_CLUSTER_DIR="/home/ubuntu/.proxmox"
+# set this to your only cluster name.  The default is "example". 
+# export PROXMOX_CLUSTER_NAME="ea"
+# If you have more than one, do not set this and 
+# instead set PROXMOX_CLUSTER_NAME in your shell before running this script.  
+# e.g. PROXMOX_CLUSTER_NAME="ea" build-vi qemu -L
+# set this to wherever you cloned the proxmox-api repo.  The default is /home/ubuntu/repos/proxmox-api
+build_install_location="/home/ubuntu/repos/proxmox-api"
+if [ -f "$build_install_location/.venv/bin/activate" ]; then
+   source "$build_install_location/.venv/bin/activate"
+   exec python3 "$build_install_location/build_vi.py" "$@"
+fi
