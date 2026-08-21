@@ -12,5 +12,5 @@ export PROXMOX_CLUSTER_DIR="/home/ubuntu/.proxmox"
 build_install_location="/home/ubuntu/repos/proxmox-api"
 if [ -f "$build_install_location/.venv/bin/activate" ]; then
    source "$build_install_location/.venv/bin/activate"
-   exec python3 "$build_install_location/build_vi.py" "$@"
+   exec python3 "$build_install_location/pvi.py" "$@"
 fi

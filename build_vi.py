@@ -10,6 +10,7 @@ PROXMOX_VERIFY_SSL=0.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 from time import sleep
 from typing import Dict, Any
@@ -103,6 +104,7 @@ def _get_command_line_args(argv) -> list[str]:
     return parser.parse_args(argv)
 
 def _detect_user_from_image(image: str) -> str:
+    """Detect the default user for cloud-init based on the image name."""
     image = image.lower()
     if any(x in image for x in ("ubuntu", "jammy", "noble", "resolute")):
         return "ubuntu"
@@ -137,6 +139,7 @@ def _read_sshkeys(sshkeys) -> str:
     return sshkeys.strip()
 
 def _build_qemu_payload(args: argparse.Namespace) -> Dict[str, Any]:
+    """Build the payload for creating a QEMU VM."""
     payload = {
         "vmid": int(args.vmid),
         "name": args.hostname,
@@ -166,12 +169,13 @@ def _build_qemu_payload(args: argparse.Namespace) -> Dict[str, Any]:
         **({"cipassword": args.passwd} if args.passwd else {}),
         **({"hostpci0": args.hostpci0} if args.hostpci0 else {}),
         **({"machine": "type=q35,viommu=virtio", "bios": "ovmf", "efidisk0": f"{args.storage_pool}:1,efitype=4m,ms-cert=2023k,pre-enrolled-keys=1"} if args.machine_type == "q35" or args.hostpci0 else {}),
-        "disk_size": args.disk_size,          # not consumed by Proxmox API, but used later to resize the boot disk after creation
-        "start": args.start_after_creation,   # not consumed by Proxmox API, but used later to optionally start the VM after creation
+        "disk_size": args.disk_size,          # not consumed by Proxmox API, but used later to resize the boot disk after creation, and before starting the VM
+        "start": args.start_after_creation,   # not consumed by Proxmox API, but used later to optionally start the VM after creation and resizing the boot disk
     }
     return payload
 
 def _build_lxc_payload(args: argparse.Namespace) -> Dict[str, Any]:
+    """Build the payload for creating an LXC container."""
     payload = {
         "vmid": int(args.vmid),
         "hostname": args.hostname,
@@ -193,7 +197,7 @@ def _build_lxc_payload(args: argparse.Namespace) -> Dict[str, Any]:
     return payload
 
 def _connect_proxmox() -> ProxmoxAPI:
-    # Connect to the Proxmox API using environment variables from the cluster environment for credentials.
+    """Connect to the Proxmox API using environment variables from the cluster environment for credentials."""
     host = os.environ.get("PROXMOX_HOST", "127.0.0.1")
     user = os.environ.get("PROXMOX_USER", "root@pam")
     token_id = os.environ.get("PROXMOX_TOKEN_ID", "default")
@@ -214,12 +218,20 @@ def _connect_proxmox() -> ProxmoxAPI:
         return ProxmoxAPI(host)
 
 def _vmid_exists(proxmox: ProxmoxAPI, vmid: int) -> bool:
+    """Check if a VMID already exists in the Proxmox cluster.
+
+    Returns the vm structure if the VMID exists, None otherwise.
+    """
     vms = proxmox.cluster.resources.get(type="vm")
     if vmid in [vm["vmid"] for vm in vms]:
-        return True
-    return False
+        vm = next(vm for vm in vms if vm["vmid"] == vmid)
+        # print(json.dumps(vm, indent=2))
+        # print(f"VMID {vmid} already exists in the cluster on node {vm['node']}.")
+        return vm
+    return None
 
 def _list_available(proxmox: ProxmoxAPI, node: str, storage_id: str, vitype: str) -> None:
+    """List available VM images or LXC templates in the specified storage."""
     files = proxmox.nodes(node).storage(storage_id).content.get()
     if vitype == "qemu":
         print(f"Available images in storage {storage_id}:")
@@ -268,6 +280,9 @@ def _build_vi_from_payload(payload: Dict[str, Any], proxmox: ProxmoxAPI, node: s
         proxmox.nodes(node).lxc.post(**payload)
     
 def main(argv: list[str] | None = None) -> int:
+    """Main function to create a Proxmox VM or LXC container based on command line arguments."""
+    if argv is None:
+        argv = os.sys.argv[1:]
     args = _get_command_line_args(argv)
     if isinstance(args, int):
         return args  # return the error code if _get_command_line_args returned an int
@@ -284,11 +299,12 @@ def main(argv: list[str] | None = None) -> int:
         _list_available(proxmox, args.node, storage_id, args.command)
         return 0
 
-    if args.vmid and _vmid_exists(proxmox, int(args.vmid)):
-        newvmid = _get_next_vmid(proxmox)
-        print(f"VMID {args.vmid} already in use on node {args.node}.  Using next available VMID: {newvmid} instead")
-        args.vmid = newvmid
-    elif not args.vmid:
+    if args.vmid:
+        found_vm = _vmid_exists(proxmox, int(args.vmid))
+        if found_vm:
+            print(f"VMID {args.vmid} in {found_vm['status']} on node {found_vm['node']} as '{found_vm['name']}' (type={found_vm['type']}).")
+            return 1
+    else:
         args.vmid = _get_next_vmid(proxmox)
         print(f"No VMID specified, using next available VMID: {args.vmid}")
         
