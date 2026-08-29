@@ -13,12 +13,12 @@ import argparse
 import json
 import os
 from time import sleep
-from typing import Dict, Any
+from typing import dict, Any
 from urllib import parse
 
 import dotenv
 from proxmoxer import ProxmoxAPI
-# from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field
 
 clusterdir = os.getenv("PROXMOX_CLUSTER_DIR", "")
 clustername= os.getenv("PROXMOX_CLUSTER_NAME", "example")
@@ -29,7 +29,7 @@ DEFAULTS = {
     "gateway": os.environ.get("GATEWAY", "192.168.86.1"),
     "storage_pool": os.environ.get("STORAGE_POOL", "nvme_pool"),
     ### Unlike build_vm.sh, we read SSH keys from an environment variable or **local** file path (not remote)
-    "sshkeys": os.environ.get("SSHKEYS", "/user/ubuntu/repos/proxmox-api/authorized_keys"),
+    "sshkeys": os.environ.get("SSHKEYS", "/home/ubuntu/repos/proxmox-api/authorized_keys"),
     "logical_import_path": os.environ.get("LOGICAL_IMPORT_PATH", "ssd_backup:import"),
     "logical_template_path": os.environ.get("LOGICAL_TEMPLATE_PATH", "ssd_backup:vztmpl"),
 }
@@ -71,7 +71,7 @@ def _get_command_line_args(argv) -> list[str]:
     create_qemu_parser.add_argument("--passwd", default="", help="VM Password for cloud-init (deprecated, optional, default empty)")
     create_qemu_parser.add_argument("-t", "--cputype", default="host", choices=["host", "kvm64", "qemu64"], help="VM CPU type (default host)")
     create_qemu_parser.add_argument("-e", "--extra_disk", default=0, type=int, help="VM Extra disk size in GB (default 0)")
-    create_qemu_parser.add_argument("-T", "--machine_type", default="q35", choices=["pc", "q35"], help="VM Machine type (default q35)")
+    create_qemu_parser.add_argument("-T", "--machine_type", default="pc", choices=["pc", "q35"], help="VM Machine type (default pc)")
     create_qemu_parser.add_argument("-d", "--display", default="none", choices=["std", "qxl", "virtio", "vmware", "cirrus", "none"], help="VM Display type (optional)")
     create_qemu_parser.add_argument("-P", "--hostpci0", default="", help="VM Host PCI device (optional)")
     create_qemu_parser.add_argument("-l", "--logical_import_path", default=DEFAULTS["logical_import_path"])
@@ -86,15 +86,16 @@ def _get_command_line_args(argv) -> list[str]:
     modify_subparsers = modify_parser.add_subparsers(dest="type", required=True)
     common_modify_parser = argparse.ArgumentParser(add_help=False)
     common_modify_parser.add_argument("-v", "--vmid", required=True, type=int, help="VM/CT ID to modify")
-    common_modify_parser.add_argument("-o", "--hostname", help="VM Hostname (optional, defaults to vm-VMID)")
-    common_modify_parser.add_argument("-c", "--cores", default=2, help="VM Number of CPU cores (default 2)")
-    common_modify_parser.add_argument("-m", "--memory", default=2048, help="VM Memory size in MB (default 2048)")
-    common_modify_parser.add_argument("-b", "--boot_disk", default=10, type=int, help="VM boot disk size in GB (default 10)")
-    common_modify_parser.add_argument("-a", "--ipaddress", default="", help="VM IP address (optional), defaults to DHCP if not provided")
-    common_modify_parser.add_argument("-p", "--resource_pool", default="", help="VM Resource pool (optional)")
-    common_modify_parser.add_argument("-r", "--remarks", default="", help="VM Remarks (optional)")
-    common_modify_parser.add_argument("-g", "--tags", default="", help="VM Tags (optional)")
+    common_modify_parser.add_argument("-o", "--hostname", default="", help="VM/CT Hostname (optional, defaults to vm-VMID)")
+    common_modify_parser.add_argument("-c", "--cores", default=2, help="VM/CT Number of CPU cores (default 2)")
+    common_modify_parser.add_argument("-m", "--memory", default=2048, help="VM/CT Memory size in MB (default 2048)")
+    common_modify_parser.add_argument("-b", "--boot_disk", default=0, type=int, help="VM/CT boot disk size in GB (default 10)")
+    common_modify_parser.add_argument("-a", "--ipaddress", default="", help="VM/CT IP address (optional), defaults to DHCP if not provided")
+    common_modify_parser.add_argument("-p", "--resource_pool", default="", help="VM/CT Resource pool (optional)")
+    common_modify_parser.add_argument("-r", "--remarks", default="", help="VM/CT Remarks (optional)")
+    common_modify_parser.add_argument("-g", "--tags", default="", help="VM/CT Tags (optional)")
     common_modify_parser.add_argument("-k", "--sshkeys", default=DEFAULTS["sshkeys"], help="VM (user)/CT (root) SSH public keys (literal or path to LOCAL file)")
+    common_modify_parser.add_argument("-y", "--yes", action="store_true", help="Confirm modification without prompting")
     modify_qemu_parser = modify_subparsers.add_parser("qemu", help="Modify an existing QEMU VM", parents=[common_modify_parser])
     modify_qemu_parser.add_argument("--passwd", default="", help="VM Password for cloud-init (deprecated, optional, default empty)")
     modify_qemu_parser.add_argument("-t", "--cputype", default="host", choices=["host", "kvm64", "qemu64"], help="VM CPU type (default host)")
@@ -206,7 +207,7 @@ def _read_sshkeys(sshkeys) -> str:
     # otherwise assume sshkeys is already the key content
     return sshkeys.strip()
 
-def _build_qemu_create_payload(args: argparse.Namespace) -> Dict[str, Any]:
+def _build_qemu_create_payload(args: argparse.Namespace) -> dict[str, Any]:
     """Build the payload for creating a QEMU VM."""
     ip_string = f"ip={args.ipaddress}/24,gw={args.gateway}" if args.ipaddress else "ip=dhcp"
     payload = {
@@ -243,7 +244,7 @@ def _build_qemu_create_payload(args: argparse.Namespace) -> Dict[str, Any]:
     }
     return payload
 
-def _build_lxc_create_payload(args: argparse.Namespace) -> Dict[str, Any]:
+def _build_lxc_create_payload(args: argparse.Namespace) -> dict[str, Any]:
     """Build the payload for creating an LXC container."""
     ip_string = f"ip={args.ipaddress}/24,gw={args.gateway}" if args.ipaddress else "ip=dhcp"
     payload = {
@@ -266,7 +267,7 @@ def _build_lxc_create_payload(args: argparse.Namespace) -> Dict[str, Any]:
     }
     return payload
 
-def _dump_payload(payload: Dict[str, Any], type: str, node: str) -> None:
+def _dump_payload(payload: dict[str, Any], type: str, node: str) -> None:
     """Dump the payload to stdout in a readable format."""
     hostname = payload.get("hostname") if type == "lxc" else payload.get("name")
     print(f"Dry run for {type.upper()} {payload['vmid']} ({hostname}) on node {node} — create payload:")
@@ -288,7 +289,7 @@ def _list_available_images(proxmox: ProxmoxAPI, node: str, storage_id: str, vity
             if f["format"] == "txz":
                 print(f"  {f['volid'].split(':')[1].split('/')[-1]}  ({f['size'] // (1024*1024)} MB)")
 
-def _build_qemu_from_payload(payload: Dict[str, Any], proxmox: ProxmoxAPI, node: str) -> int:
+def _build_qemu_from_payload(payload: dict[str, Any], proxmox: ProxmoxAPI, node: str) -> int:
     """Create a VM from the given payload."""
     print(f"🛡️ Building QEMU {payload['vmid']} ({payload['name']}) on node {node}")
     startup = payload.pop("start", 0)  # save desired startup behavior and remove from payload
@@ -311,7 +312,7 @@ def _build_qemu_from_payload(payload: Dict[str, Any], proxmox: ProxmoxAPI, node:
         print(f"✅ Created  QEMU {payload['vmid']} ({payload['name']}) on node {node}")
         return 0
 
-def _build_lxc_from_payload(payload: Dict[str, Any], proxmox: ProxmoxAPI, node: str) -> int:
+def _build_lxc_from_payload(payload: dict[str, Any], proxmox: ProxmoxAPI, node: str) -> int:
     """Create an LXC container from the given payload."""
     print(f"🛡️ Building LXC {payload['vmid']} ({payload['hostname']}) on node {node}")
     try:
@@ -375,8 +376,7 @@ def _delete_vi(proxmox: ProxmoxAPI, vmid: int, confirmed: bool = False) -> int:
         print(f"❌ VMID {vmid} does not exist in the cluster.")
         return 1
     try:
-        if not confirmed:
-            if not ask_yes_no(f"Are you sure you want to delete VMID {vmid} (type={vm['type']}) on node {vm['node']} as '{vm['name']}'? [N/y]: ", default=False):
+        if not confirmed and not ask_yes_no(f"Are you sure you want to delete VMID {vmid} (type={vm['type']}) on node {vm['node']} as '{vm['name']}'? [N/y]: ", default=False):
                 print(f"❌ Deletion aborted for VMID {vmid}.")
                 return 1
         payload = {"purge": 1}  # purge the VM or LXC container
@@ -428,7 +428,7 @@ def main(argv: list[str] | None = None) -> int:
                 _list_available_images(proxmox, args.node, args.storage_id, args.type)
                 return 0
             elif not args.image and not args.list:
-                print(f"❌ Error: --image is required for create command unless --list is specified.")
+                print("❌ Error: --image is required for create command unless --list is specified.")
                 return 2
             else:
                 args.vmid = _validate_vmid(proxmox, args)
@@ -450,7 +450,7 @@ def main(argv: list[str] | None = None) -> int:
         case "modify":
             for keys, values in vars(args).items():
                 print(f"{keys}: {values}")
-            pass  # TODO: implement modify functionality
+            # TODO: implement modify functionality
         case "backup":
             return _backup_vi(proxmox, args.vmid, args.storage_id)
         case "delete":
