@@ -1,37 +1,39 @@
 #!/usr/bin/env python3
 # PROXMOX_CLUSTER_NAME is required from environment, and used to read the cluster config file
-"""Create Proxmox VMs using Proxmox API (via proxmoxer) — replacement for build_vm.sh
+"""Create Proxmox virtual instances (VMs or LXCs) using Proxmox API (via proxmoxer)
 
-Usage: mirror most options from build_vm.sh. Connects to Proxmox API
-using environment variables: PROXMOX_HOST, PROXMOX_USER, PROXMOX_PASSWORD
-or PROXMOX_TOKEN_ID and PROXMOX_TOKEN_SECRET. Disable SSL verify with
-PROXMOX_VERIFY_SSL=0.
+Connects to Proxmox API
+using environment variables: 
+PROXMOX_HOST, PROXMOX_USER, and either: 
+PROXMOX_TOKEN_ID and PROXMOX_TOKEN_SECRET (preferred) or 
+PROXMOX_PASSWORD (deprecated). 
+Disable SSL verify with PROXMOX_VERIFY_SSL=0.
 """
 from __future__ import annotations
 
 import argparse
-import json
+import json # not currently used
 import os
 from time import sleep
-from typing import dict, Any
+from typing import Any
 from urllib import parse
 
 import dotenv
 from proxmoxer import ProxmoxAPI
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field # TODO: Use Pydantic models for validation of VM/LXC configurations
 
-clusterdir = os.getenv("PROXMOX_CLUSTER_DIR", "")
+clusterdir = os.getenv("PROXMOX_CLUSTER_DIR", "/home/ubuntu/.proxmox")
 clustername= os.getenv("PROXMOX_CLUSTER_NAME", "example")
 dotenv.load_dotenv(f"{clusterdir}/{clustername}.env")
 
 DEFAULTS = {
     "pve_node": os.environ.get("PVENODE", "local"),
-    "gateway": os.environ.get("GATEWAY", "192.168.86.1"),
-    "storage_pool": os.environ.get("STORAGE_POOL", "nvme_pool"),
+    "gateway": os.environ.get("GATEWAY", "192.168.1.1"),
+    "storage_pool": os.environ.get("STORAGE_POOL", "local-lvm"),
     ### Unlike build_vm.sh, we read SSH keys from an environment variable or **local** file path (not remote)
-    "sshkeys": os.environ.get("SSHKEYS", "/home/ubuntu/repos/proxmox-api/authorized_keys"),
-    "logical_import_path": os.environ.get("LOGICAL_IMPORT_PATH", "ssd_backup:import"),
-    "logical_template_path": os.environ.get("LOGICAL_TEMPLATE_PATH", "ssd_backup:vztmpl"),
+    "sshkeys": os.environ.get("SSHKEYS", "/home/ubuntu/.ssh/authorized_keys"),
+    "logical_import_path": os.environ.get("LOGICAL_IMPORT_PATH", "local:import"),
+    "logical_template_path": os.environ.get("LOGICAL_TEMPLATE_PATH", "local:vztmpl"),
 }
 
 def _get_command_line_args(argv) -> list[str]:
@@ -86,23 +88,23 @@ def _get_command_line_args(argv) -> list[str]:
     modify_subparsers = modify_parser.add_subparsers(dest="type", required=True)
     common_modify_parser = argparse.ArgumentParser(add_help=False)
     common_modify_parser.add_argument("-v", "--vmid", required=True, type=int, help="VM/CT ID to modify")
-    common_modify_parser.add_argument("-o", "--hostname", default="", help="VM/CT Hostname (optional, defaults to vm-VMID)")
-    common_modify_parser.add_argument("-c", "--cores", default=2, help="VM/CT Number of CPU cores (default 2)")
-    common_modify_parser.add_argument("-m", "--memory", default=2048, help="VM/CT Memory size in MB (default 2048)")
-    common_modify_parser.add_argument("-b", "--boot_disk", default=0, type=int, help="VM/CT boot disk size in GB (default 10)")
-    common_modify_parser.add_argument("-a", "--ipaddress", default="", help="VM/CT IP address (optional), defaults to DHCP if not provided")
-    common_modify_parser.add_argument("-p", "--resource_pool", default="", help="VM/CT Resource pool (optional)")
-    common_modify_parser.add_argument("-r", "--remarks", default="", help="VM/CT Remarks (optional)")
-    common_modify_parser.add_argument("-g", "--tags", default="", help="VM/CT Tags (optional)")
-    common_modify_parser.add_argument("-k", "--sshkeys", default=DEFAULTS["sshkeys"], help="VM (user)/CT (root) SSH public keys (literal or path to LOCAL file)")
+    common_modify_parser.add_argument("-o", "--hostname", default="", help="new VM/CT Hostname") # restart required for hostname change
+    common_modify_parser.add_argument("-c", "--cores", default=2, help="new VM/CT Number of CPU cores") # restart required for qemu, not for lxc
+    common_modify_parser.add_argument("-m", "--memory", default=2048, help="new VM/CT Memory size in MB") # restart required for qemu, not for lxc
+    common_modify_parser.add_argument("-b", "--boot_disk", default=0, type=int, help="new VM/CT boot disk size in GB") # restart required
+    common_modify_parser.add_argument("-a", "--ipaddress", default="", help="new VM/CT IP address (optional), pass 'dhcp' to use DHCP") # restart required
+    common_modify_parser.add_argument("-p", "--resource_pool", default="", help="new VM/CT Resource pool (optional)") # restart not required
+    common_modify_parser.add_argument("-r", "--remarks", default="", help="new VM/CT Remarks (optional)") # restart not required
+    common_modify_parser.add_argument("-g", "--tags", default="", help="new VM/CT Tags (optional)") # restart not required
+    common_modify_parser.add_argument("-k", "--sshkeys", default="", help="VM (user)/CT (root) new SSH public keys (literal or path to LOCAL file)") # restart required
     common_modify_parser.add_argument("-y", "--yes", action="store_true", help="Confirm modification without prompting")
     modify_qemu_parser = modify_subparsers.add_parser("qemu", help="Modify an existing QEMU VM", parents=[common_modify_parser])
-    modify_qemu_parser.add_argument("--passwd", default="", help="VM Password for cloud-init (deprecated, optional, default empty)")
-    modify_qemu_parser.add_argument("-t", "--cputype", default="host", choices=["host", "kvm64", "qemu64"], help="VM CPU type (default host)")
-    modify_qemu_parser.add_argument("-e", "--extra_disk", default=0, type=int, help="VM Extra disk size in GB (default 0)")
-    modify_qemu_parser.add_argument("-T", "--machine_type", default="q35", choices=["pc", "q35"], help="VM Machine type (default q35)")
-    modify_qemu_parser.add_argument("-d", "--display", default="none", choices=["std", "qxl", "virtio", "vmware", "cirrus", "none"], help="VM Display type (optional)")
-    modify_qemu_parser.add_argument("-P", "--hostpci0", default="", help="VM Host PCI device (optional)")
+    modify_qemu_parser.add_argument("--passwd", default="", help="VM Password for cloud-init (deprecated, optional, default empty)") # restart maybe required
+    modify_qemu_parser.add_argument("-t", "--cputype", default="host", choices=["host", "kvm64", "qemu64"], help="new VM CPU type (default host)") # restart required
+    modify_qemu_parser.add_argument("-e", "--extra_disk", default=0, type=int, help="new VM Extra disk size in GB (default 0), or new additional disk size in GB") # restart required
+    modify_qemu_parser.add_argument("-T", "--machine_type", default="q35", choices=["pc", "q35"], help="new VM Machine type (default q35)") # restart required
+    modify_qemu_parser.add_argument("-d", "--display", default="none", choices=["std", "qxl", "virtio", "vmware", "cirrus", "none"], help="new VM Display type (optional)") # restart required
+    modify_qemu_parser.add_argument("-P", "--hostpci0", default="", help="new VM Host PCI device (optional)") # restart required
     modify_lxc_parser = modify_subparsers.add_parser("lxc", help="Modify an existing LXC container", parents=[common_modify_parser])
 
     ## backup parser
@@ -169,6 +171,22 @@ def _validate_vmid(proxmox: ProxmoxAPI, args: argparse.Namespace) -> None:
     else:
         return args.vmid
 
+def _get_vi_config(proxmox: ProxmoxAPI, vmid: int) -> dict[str, Any]:
+    """Retrieve the current configuration of a VM or container."""
+    vm  = _vmid_exists(proxmox, vmid)
+    # print(vm)
+    if not vm:
+        raise ValueError(f"VMID {vmid} does not exist")
+    else:
+        node = vm["node"]
+        vmid = vm["vmid"]
+        vitype = vm["type"]
+    # Determine if the VM is a QEMU VM or an LXC container
+    if vitype == "lxc":
+        return vitype, proxmox.nodes(node).lxc(vmid).config.get()
+    else:
+        return vitype, proxmox.nodes(node).qemu(vmid).config.get()
+    
 def _detect_user_from_image(image: str) -> str:
     """Detect the default user for cloud-init based on the image name. 
     QEMU images often have different default users depending on the distribution. 
@@ -264,6 +282,55 @@ def _build_lxc_create_payload(args: argparse.Namespace) -> dict[str, Any]:
         **({"description": args.remarks} if args.remarks else {}),
         **({"tags": args.tags} if args.tags else {}),
         "start": 0 if args.no_start else 1,
+    }
+    return payload
+
+def _build_qemu_modify_payload(current_config: dict[str, Any], args: argparse.Namespace) -> dict[str, Any]:
+    """Build the payload for creating a QEMU VM."""
+
+    if args.ipaddress == "dhcp":
+        ip_string = "ip=dhcp"
+    elif args.ipaddress:
+        ip_string = f"ip={args.ipaddress}/24,gw={args.gateway}"
+    payload = {
+        "vmid": int(args.vmid),
+        **({"name": args.hostname, "restart": True} if args.hostname and args.hostname != current_config.get("name") else {}),
+        **({"cores": int(args.cores), "restart": True} if args.cores and int(args.cores) != current_config.get("cores") else {}),
+        **({"memory": int(args.memory), "balloon": int(args.memory), "restart": True} if args.memory and int(args.memory) != current_config.get("memory") else {}),
+        "scsi0": f"{args.storage_pool}:0,import-from={args.logical_import_path}/{args.image}",
+        # "ciuser": args.user or _detect_user_from_image(args.image),
+        **({"ipconfig0": ip_string, "restart": True} if ip_string and ip_string != current_config.get("ipconfig0") else {}),
+        # **({"sshkeys": parse.quote(_read_sshkeys(args.sshkeys), safe='')} if args.sshkeys else {}),
+        **({"pool": args.resource_pool} if args.resource_pool else {}),
+        **({"cpu": f"cputype={args.cputype},phys-bits=host"} if args.cputype == "host" else {"cpu": f"cputype={args.cputype}"} if args.cputype else {}),
+        **({"scsi1": f"file={args.storage_pool}:{args.extra_disk}"} if args.extra_disk and args.extra_disk != 0 else {}),
+        **({"description": args.remarks} if args.remarks else {}),
+        **({"tags": args.tags} if args.tags else {}),
+        **({"vga": args.display, "restart": True} if args.display else {}),
+        **({"cipassword": args.passwd} if args.passwd else {}),
+        **({"hostpci0": args.hostpci0, "restart": True} if args.hostpci0 else {}),
+        **({"machine": "type=q35,viommu=virtio", "bios": "ovmf", "efidisk0": f"{args.storage_pool}:1,efitype=4m,ms-cert=2023k,pre-enrolled-keys=1"} if args.machine_type == "q35" or args.hostpci0 else {}),
+        "disk_size": args.boot_disk,          # not consumed by Proxmox API, but used later to resize the boot disk after creation, and before starting the VM
+    }
+    return payload
+
+def _build_lxc_modify_payload(current_config: dict[str, Any], args: argparse.Namespace) -> dict[str, Any]:
+    """Build the payload for modifying an LXC container."""
+
+    if args.ipaddress == "dhcp":
+        ip_string = "ip=dhcp"
+    elif args.ipaddress:
+        ip_string = f"ip={args.ipaddress}/24,gw={args.gateway}"
+    payload = {
+        "vmid": int(args.vmid),
+        **({"hostname": args.hostname, "restart": True} if args.hostname and args.hostname != current_config.get("hostname") else {}),
+        **({"cores": int(args.cores), "restart": True} if args.cores and int(args.cores) != current_config.get("cores") else {}),
+        **({"memory": int(args.memory), "restart": True} if args.memory and int(args.memory) != current_config.get("memory") else {}),
+        **({"ipconfig0": ip_string, "restart": True} if ip_string and ip_string != current_config.get("ipconfig0") else {}),
+        **({"description": args.remarks} if args.remarks else {}),
+        **({"tags": args.tags} if args.tags else {}),
+        **({"vga": args.display, "restart": True} if args.display else {}),
+        **({"cipassword": args.passwd} if args.passwd else {}),
     }
     return payload
 
@@ -402,6 +469,39 @@ def _delete_vi(proxmox: ProxmoxAPI, vmid: int, confirmed: bool = False) -> int:
         print(f"✅ Deleted VMID {vmid}")
         return 0
 
+def _modify_vi(proxmox: ProxmoxAPI, vmid: int, args) -> int:
+    """Modify a VM or LXC container with the given VMID based on the provided arguments."""
+    vitype, vm_config = _get_vi_config(proxmox, vmid)
+    if not vm_config:
+        print(f"❌ VMID {vmid} does not exist in the cluster.")
+        return 1
+    try:
+        # print(f"Modifying VMID {vmid} with args: {args}")
+        print(f"Current configuration for VMID {vmid}: {vm_config}")
+        if vitype == "qemu":
+            payload = _build_qemu_modify_payload(vm_config, args)
+            if args.dry_run:
+                _dump_payload(payload, args.type, args.node)
+            else:
+                pass
+                # _modify_qemu_from_payload(payload, proxmox, args.node)
+        elif vitype == "lxc":
+            payload = _build_lxc_modify_payload(vm_config, args)
+            if args.dry_run:
+                _dump_payload(payload, args.type, args.node)
+            else:
+                pass
+                # _modify_lxc_from_payload(payload, proxmox, args.node)
+        else:
+            print(f"❌ Unknown VM type for VMID {vmid}: {vitype}")
+            return 1
+    except Exception as exc:
+        print(f"❌ Modification failed for VMID {vmid}: {exc}")
+        return 1
+    else:
+        print(f"✅ Modified VMID {vmid}")
+        return 0
+
 def main(argv: list[str] | None = None) -> int:
     """Main function to manage a Proxmox VM or LXC container based on command line arguments."""
 
@@ -448,8 +548,9 @@ def main(argv: list[str] | None = None) -> int:
                         else:
                             _build_lxc_from_payload(payload, proxmox, args.node)
         case "modify":
-            for keys, values in vars(args).items():
-                print(f"{keys}: {values}")
+            # for keys, values in vars(args).items():
+            #     print(f"{keys}: {values}")
+            _modify_vi(proxmox, args.vmid, args)
             # TODO: implement modify functionality
         case "backup":
             return _backup_vi(proxmox, args.vmid, args.storage_id)
