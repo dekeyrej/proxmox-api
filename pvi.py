@@ -49,10 +49,10 @@ def _get_command_line_args(argv) -> list[str]:
     create_subparsers = create_parser.add_subparsers(dest="type", required=True)
     common_create_parser = argparse.ArgumentParser(add_help=False)
     common_create_parser.add_argument("-i", "--image", help="VM Image name (required), run with -L to list available images")
-    common_create_parser.add_argument("-v", "--vmid", help="VM ID (optional, auto-assigned if not provided)", type=int)
+    common_create_parser.add_argument("-v", "--vmid", type=int, help="VM ID (optional, auto-assigned if not provided)")
     common_create_parser.add_argument("-o", "--hostname", help="VM Hostname (optional, defaults to vm-VMID)")
-    common_create_parser.add_argument("-c", "--cores", default=2, help="VM Number of CPU cores (default 2)")
-    common_create_parser.add_argument("-m", "--memory", default=2048, help="VM Memory size in MB (default 2048)")
+    common_create_parser.add_argument("-c", "--cores", default=2, type=int, help="VM Number of CPU cores (default 2)")
+    common_create_parser.add_argument("-m", "--memory", default=2048, type=int, help="VM Memory size in MB (default 2048)")
     common_create_parser.add_argument("-b", "--boot_disk", default=10, type=int, help="VM boot disk size in GB (default 10)")
     common_create_parser.add_argument("-a", "--ipaddress", default="", help="VM IP address (optional), defaults to DHCP if not provided")
     common_create_parser.add_argument("-p", "--resource_pool", default="", help="VM Resource pool (optional)")
@@ -89,14 +89,16 @@ def _get_command_line_args(argv) -> list[str]:
     common_modify_parser = argparse.ArgumentParser(add_help=False)
     common_modify_parser.add_argument("-v", "--vmid", required=True, type=int, help="VM/CT ID to modify")
     common_modify_parser.add_argument("-o", "--hostname", default="", help="new VM/CT Hostname") # restart required for hostname change
-    common_modify_parser.add_argument("-c", "--cores", default=2, help="new VM/CT Number of CPU cores") # restart required for qemu, not for lxc
-    common_modify_parser.add_argument("-m", "--memory", default=2048, help="new VM/CT Memory size in MB") # restart required for qemu, not for lxc
+    common_modify_parser.add_argument("-c", "--cores", default=2, type=int, help="new VM/CT Number of CPU cores") # restart required for qemu, not for lxc
+    common_modify_parser.add_argument("-m", "--memory", default=2048, type=int, help="new VM/CT Memory size in MB") # restart required for qemu, not for lxc
     common_modify_parser.add_argument("-b", "--boot_disk", default=0, type=int, help="new VM/CT boot disk size in GB") # restart required
     common_modify_parser.add_argument("-a", "--ipaddress", default="", help="new VM/CT IP address (optional), pass 'dhcp' to use DHCP") # restart required
+    common_modify_parser.add_argument("-w", "--gateway", default=DEFAULTS["gateway"], help="VM Gateway (default is the value from DEFAULTS)")
     common_modify_parser.add_argument("-p", "--resource_pool", default="", help="new VM/CT Resource pool (optional)") # restart not required
     common_modify_parser.add_argument("-r", "--remarks", default="", help="new VM/CT Remarks (optional)") # restart not required
     common_modify_parser.add_argument("-g", "--tags", default="", help="new VM/CT Tags (optional)") # restart not required
     common_modify_parser.add_argument("-k", "--sshkeys", default="", help="VM (user)/CT (root) new SSH public keys (literal or path to LOCAL file)") # restart required
+    common_modify_parser.add_argument("-s", "--storage_pool", default=DEFAULTS["storage_pool"], help="VM Storage pool (default is the value from DEFAULTS)")
     common_modify_parser.add_argument("-y", "--yes", action="store_true", help="Confirm modification without prompting")
     modify_qemu_parser = modify_subparsers.add_parser("qemu", help="Modify an existing QEMU VM", parents=[common_modify_parser])
     modify_qemu_parser.add_argument("--passwd", default="", help="VM Password for cloud-init (deprecated, optional, default empty)") # restart maybe required
@@ -148,6 +150,7 @@ def _vmid_exists(proxmox: ProxmoxAPI, vmid: int) -> bool:
     vms = proxmox.cluster.resources.get(type="vm")
     if vmid in [vm["vmid"] for vm in vms]:
         vm = next(vm for vm in vms if vm["vmid"] == vmid)
+        # print(vm)
         return vm
     return None
 
@@ -183,10 +186,112 @@ def _get_vi_config(proxmox: ProxmoxAPI, vmid: int) -> dict[str, Any]:
         vitype = vm["type"]
     # Determine if the VM is a QEMU VM or an LXC container
     if vitype == "lxc":
-        return vitype, proxmox.nodes(node).lxc(vmid).config.get()
+        retval = proxmox.nodes(node).lxc(vmid).config.get()
+        retval["node"] = node
+        retval["type"] = vitype
+        return retval
     else:
-        return vitype, proxmox.nodes(node).qemu(vmid).config.get()
+        retval = proxmox.nodes(node).qemu(vmid).config.get()
+        retval["node"] = node
+        retval["type"] = vitype
+        return retval
     
+def _stop_vi(proxmox: ProxmoxAPI, vmid: int) -> int:
+    """Stop a VM or LXC container with the given VMID."""
+    vm = _vmid_exists(proxmox, vmid)
+    if not vm:
+        print(f"❌ VMID {vmid} does not exist in the cluster.")
+        return 1
+    node = vm["node"]
+    status = vm["status"]
+    type = vm["type"]
+    try:
+        if status != "stopped":
+            print(f"ℹ️ Stopping VMID {vmid} on node {node}")
+            if type == "qemu":
+                proxmox.nodes(node).qemu(vmid).status.stop.post()
+                while proxmox.nodes(node).qemu(vmid).status.current.get()["status"] != "stopped":
+                    sleep(1)
+            elif type == "lxc":
+                proxmox.nodes(node).lxc(vmid).status.stop.post()
+                while proxmox.nodes(node).lxc(vmid).status.current.get()["status"] != "stopped":
+                    sleep(1)
+            else:
+                print(f"❌ Unknown VM type for VMID {vmid}: {type}")
+                return 1
+        else:
+            print(f"ℹ️ VMID {vmid} is already stopped on node {node}")
+    except Exception as exc:
+        print(f"❌ Failed to stop VMID {vmid}: {exc}")
+        return 1
+    else:
+        print(f"✅ Stopped VMID {vmid} on node {node}")
+        return 0
+
+def _start_vi(proxmox: ProxmoxAPI, vmid: int) -> int:
+    """Start a VM or LXC container with the given VMID."""
+    vm = _vmid_exists(proxmox, vmid)
+    if not vm:
+        print(f"❌ VMID {vmid} does not exist in the cluster.")
+        return 1
+    node = vm["node"]
+    status = vm["status"]
+    type = vm["type"]
+    try:
+        if status != "running":
+            print(f"ℹ️ Starting VMID {vmid} on node {node}")
+            if type == "qemu":
+                proxmox.nodes(node).qemu(vmid).status.start.post()
+                while proxmox.nodes(node).qemu(vmid).status.current.get()["status"] != "running":
+                    sleep(1)
+            elif type == "lxc":
+                proxmox.nodes(node).lxc(vmid).status.start.post()
+                while proxmox.nodes(node).lxc(vmid).status.current.get()["status"] != "running":
+                    sleep(1)
+            else:
+                print(f"❌ Unknown VM type for VMID {vmid}: {type}")
+                return 1
+        else:
+            print(f"ℹ️ VMID {vmid} is already running on node {node}")
+    except Exception as exc:
+        print(f"❌ Failed to start VMID {vmid}: {exc}")
+        return 1
+    else:
+        print(f"✅ Started VMID {vmid} on node {node}")
+        return 0
+
+def _reboot_vi(proxmox: ProxmoxAPI, vmid: int) -> int:
+    """Reboot a VM or LXC container with the given VMID."""
+    vm = _vmid_exists(proxmox, vmid)
+    if not vm:
+        print(f"❌ VMID {vmid} does not exist in the cluster.")
+        return 1
+    node = vm["node"]
+    # status = vm["status"]
+    type = vm["type"]
+    try:
+        # if status != "running":
+        print(f"ℹ️ Rebooting VMID {vmid} on node {node}")
+        if type == "qemu":
+            proxmox.nodes(node).qemu(vmid).status.reboot.post()
+            while proxmox.nodes(node).qemu(vmid).status.current.get()["status"] != "running":
+                sleep(1)
+        elif type == "lxc":
+            proxmox.nodes(node).lxc(vmid).status.reset.post()
+            while proxmox.nodes(node).lxc(vmid).status.current.get()["status"] != "running":
+                sleep(1)
+        else:
+            print(f"❌ Unknown VM type for VMID {vmid}: {type}")
+            return 1
+        # else:
+        #     print(f"ℹ️ VMID {vmid} is already running on node {node}")
+    except Exception as exc:
+        print(f"❌ Failed to reboot VMID {vmid}: {exc}")
+        return 1
+    else:
+        print(f"✅ Rebooted VMID {vmid} on node {node}")
+        return 0
+
 def _detect_user_from_image(image: str) -> str:
     """Detect the default user for cloud-init based on the image name. 
     QEMU images often have different default users depending on the distribution. 
@@ -292,25 +397,28 @@ def _build_qemu_modify_payload(current_config: dict[str, Any], args: argparse.Na
         ip_string = "ip=dhcp"
     elif args.ipaddress:
         ip_string = f"ip={args.ipaddress}/24,gw={args.gateway}"
+    else:
+        ip_string = ""
     payload = {
         "vmid": int(args.vmid),
         **({"name": args.hostname, "restart": True} if args.hostname and args.hostname != current_config.get("name") else {}),
         **({"cores": int(args.cores), "restart": True} if args.cores and int(args.cores) != current_config.get("cores") else {}),
-        **({"memory": int(args.memory), "balloon": int(args.memory), "restart": True} if args.memory and int(args.memory) != current_config.get("memory") else {}),
-        "scsi0": f"{args.storage_pool}:0,import-from={args.logical_import_path}/{args.image}",
+        **({"memory": int(args.memory), "balloon": int(args.memory), "restart": True} if args.memory and int(args.memory) != int(current_config.get("memory")) else {}),
+        # "scsi0": f"{args.storage_pool}:0,import-from={args.logical_import_path}/{args.image}",
         # "ciuser": args.user or _detect_user_from_image(args.image),
         **({"ipconfig0": ip_string, "restart": True} if ip_string and ip_string != current_config.get("ipconfig0") else {}),
         # **({"sshkeys": parse.quote(_read_sshkeys(args.sshkeys), safe='')} if args.sshkeys else {}),
         **({"pool": args.resource_pool} if args.resource_pool else {}),
-        **({"cpu": f"cputype={args.cputype},phys-bits=host"} if args.cputype == "host" else {"cpu": f"cputype={args.cputype}"} if args.cputype else {}),
+        # **({"cpu": f"cputype={args.cputype},phys-bits=host"} if args.cputype == "host" and args.cputype != current_config.get("cpu").split(",")[0] else {"cpu": f"cputype={args.cputype}"} if args.cputype else {}),
         **({"scsi1": f"file={args.storage_pool}:{args.extra_disk}"} if args.extra_disk and args.extra_disk != 0 else {}),
         **({"description": args.remarks} if args.remarks else {}),
         **({"tags": args.tags} if args.tags else {}),
-        **({"vga": args.display, "restart": True} if args.display else {}),
+        **({"vga": args.display, "restart": True} if args.display and args.display != current_config.get("vga") else {}),
         **({"cipassword": args.passwd} if args.passwd else {}),
-        **({"hostpci0": args.hostpci0, "restart": True} if args.hostpci0 else {}),
-        **({"machine": "type=q35,viommu=virtio", "bios": "ovmf", "efidisk0": f"{args.storage_pool}:1,efitype=4m,ms-cert=2023k,pre-enrolled-keys=1"} if args.machine_type == "q35" or args.hostpci0 else {}),
-        "disk_size": args.boot_disk,          # not consumed by Proxmox API, but used later to resize the boot disk after creation, and before starting the VM
+        # **({"hostpci0": args.hostpci0, "restart": True} if args.hostpci0 and args.hostpci0 != current_config.get("hostpci0") else {}),
+        # **({"machine": "type=q35,viommu=virtio", "bios": "ovmf", "efidisk0": f"{args.storage_pool}:1,efitype=4m,ms-cert=2023k,pre-enrolled-keys=1"} if (args.machine_type and args.machine_type != current_config.get("machine")) or (args.hostpci0 and args.hostpci0 != current_config.get("hostpci0")) else {}),
+        **({"disk_size": args.boot_disk} if args.boot_disk else {}),          # not consumed by Proxmox API, but used later to resize the boot disk after creation, and before starting the VM
+        # "node": current_config.get("node"),
     }
     return payload
 
@@ -391,6 +499,35 @@ def _build_lxc_from_payload(payload: dict[str, Any], proxmox: ProxmoxAPI, node: 
         print(f"✅ Created  LXC {payload['vmid']} ({payload['hostname']}) on node {node}")
         return 0
 
+def _modify_vi_from_payload(payload: dict[str, Any], proxmox: ProxmoxAPI, node: str) -> int:
+    """Modify a VM or LXC container from the given payload."""
+    vm = _vmid_exists(proxmox, int(payload["vmid"]))
+    vmid = int(payload["vmid"])
+    type = vm["type"]
+    restart = payload.pop("restart", False)
+    # if restart and _stop_vi(proxmox, vmid) != 0:
+    #     return 1
+    # Continue with modification after stopping the VM
+    try:
+        # sleep(5)
+        if type == "qemu":
+            print(f"Modifying QEMU VMID {vmid} on node {node}")
+            proxmox.nodes(node).qemu(vmid).config.put(**payload)
+        elif type == "lxc":
+            print(f"Modifying LXC VMID {vmid} on node {node}")
+            proxmox.nodes(node).lxc(vmid).config.put(**payload)
+        else:
+            print(f"❌ Unknown VM type for VMID {vmid}: {type}")
+            return 1
+    except Exception as exc:
+        print(f"❌ Modification failed for VMID {vmid} on node {node}: {exc}")
+        return 1
+    else:
+        if restart:
+            _reboot_vi(proxmox, vmid)
+        print(f"✅ Modified VMID {vmid} on node {node}")
+        return 0
+
 def ask_yes_no(prompt="Do you want to continue? [N/y]: ", default=False) -> bool:
     """Ask the user a yes/no question and return True for yes and False for no."""
     while True:
@@ -447,17 +584,20 @@ def _delete_vi(proxmox: ProxmoxAPI, vmid: int, confirmed: bool = False) -> int:
                 print(f"❌ Deletion aborted for VMID {vmid}.")
                 return 1
         payload = {"purge": 1}  # purge the VM or LXC container
+        if _stop_vi(proxmox, vmid) != 0:
+            return 1
+
         if vm["type"] == "qemu":
-            if vm["status"] == "running":
-                proxmox.nodes(vm["node"]).qemu(vmid).status.stop.post()
-                while proxmox.nodes(vm["node"]).qemu(vmid).status.current.get()["status"] == "running":
-                    sleep(1)
+            # if vm["status"] == "running":
+            #     proxmox.nodes(vm["node"]).qemu(vmid).status.stop.post()
+            #     while proxmox.nodes(vm["node"]).qemu(vmid).status.current.get()["status"] == "running":
+            #         sleep(1)
             proxmox.nodes(vm["node"]).qemu(vmid).delete(**payload)
         elif vm["type"] == "lxc":
-            if vm["status"] == "running":
-                proxmox.nodes(vm["node"]).lxc(vmid).status.stop.post()
-                while proxmox.nodes(vm["node"]).lxc(vmid).status.current.get()["status"] == "running":
-                    sleep(1)
+                    # if vm["status"] == "running":
+                    #     proxmox.nodes(vm["node"]).lxc(vmid).status.stop.post()
+                    #     while proxmox.nodes(vm["node"]).lxc(vmid).status.current.get()["status"] == "running":
+                    #         sleep(1)
             proxmox.nodes(vm["node"]).lxc(vmid).delete(**payload)
         else:
             print(f"❌ Unknown VM type for VMID {vmid}: {vm['type']}")
@@ -471,29 +611,30 @@ def _delete_vi(proxmox: ProxmoxAPI, vmid: int, confirmed: bool = False) -> int:
 
 def _modify_vi(proxmox: ProxmoxAPI, vmid: int, args) -> int:
     """Modify a VM or LXC container with the given VMID based on the provided arguments."""
-    vitype, vm_config = _get_vi_config(proxmox, vmid)
+    vm_config = _get_vi_config(proxmox, vmid)
     if not vm_config:
         print(f"❌ VMID {vmid} does not exist in the cluster.")
         return 1
     try:
         # print(f"Modifying VMID {vmid} with args: {args}")
         print(f"Current configuration for VMID {vmid}: {vm_config}")
-        if vitype == "qemu":
+        if vm_config["type"] == "qemu":
             payload = _build_qemu_modify_payload(vm_config, args)
-            if args.dry_run:
-                _dump_payload(payload, args.type, args.node)
-            else:
-                pass
-                # _modify_qemu_from_payload(payload, proxmox, args.node)
-        elif vitype == "lxc":
+            # if args.dry_run:
+            _dump_payload(payload, args.type, vm_config["node"])
+            # else:
+            #     pass
+
+            _modify_vi_from_payload(payload, proxmox, vm_config["node"])
+        elif vm_config["type"] == "lxc":
             payload = _build_lxc_modify_payload(vm_config, args)
             if args.dry_run:
-                _dump_payload(payload, args.type, args.node)
+                _dump_payload(payload, args.type, vm_config["node"])
             else:
                 pass
-                # _modify_lxc_from_payload(payload, proxmox, args.node)
+                # _modify_vi_from_payload(payload, proxmox, vm_config["node"])
         else:
-            print(f"❌ Unknown VM type for VMID {vmid}: {vitype}")
+            print(f"❌ Unknown VM type for VMID {vmid}: {vm_config['type']}")
             return 1
     except Exception as exc:
         print(f"❌ Modification failed for VMID {vmid}: {exc}")
