@@ -10,12 +10,12 @@ Disable SSL verify with PROXMOX_VERIFY_SSL=0.
 
 import os
 from time import sleep
-from typing import Any
-from urllib import parse
+from typing import Optional
+
 
 import dotenv
 from proxmoxer import ProxmoxAPI
-from pydantic import BaseModel, Field # TODO: Use Pydantic models for validation of VM/LXC configurations
+from typing import Optional
 
 clusterdir = os.getenv("PROXMOX_CLUSTER_DIR", "/home/ubuntu/.proxmox")
 clustername= os.getenv("PROXMOX_CLUSTER_NAME", "example")
@@ -25,7 +25,7 @@ def _connect_proxmox() -> ProxmoxAPI:
     """Connect to the Proxmox API using environment variables from the cluster environment for credentials."""
     host = os.environ.get("PROXMOX_HOST", "127.0.0.1")
     user = os.environ.get("PROXMOX_USER", "root@pam")
-    token_id = os.environ.get("PROXMOX_TOKEN_ID", "default")
+    token_id = os.environ.get("PROXMOX_TOKEN_ID")
     token_secret = os.environ.get("PROXMOX_TOKEN_SECRET")
     password = os.environ.get("PROXMOX_PASSWORD")
     verify_ssl = os.environ.get("PROXMOX_VERIFY_SSL", "0") not in ("0", "false", "False")
@@ -62,15 +62,15 @@ def _stop_vi(proxmox: ProxmoxAPI, vmid: int) -> int:
         return 1
     node = vm["node"]
     status = vm["status"]
-    type = vm["type"]
+    vm_type = vm["type"]
     try:
         if status != "stopped":
             print(f"ℹ️ Stopping VMID {vmid} on node {node}")
-            if type == "qemu":
+            if vm_type == "qemu":
                 proxmox.nodes(node).qemu(vmid).status.stop.post()
                 while proxmox.nodes(node).qemu(vmid).status.current.get()["status"] != "stopped":
                     sleep(1)
-            elif type == "lxc":
+            if vm_type == "lxc":
                 proxmox.nodes(node).lxc(vmid).status.stop.post()
                 while proxmox.nodes(node).lxc(vmid).status.current.get()["status"] != "stopped":
                     sleep(1)
@@ -94,20 +94,20 @@ def _start_vi(proxmox: ProxmoxAPI, vmid: int) -> int:
         return 1
     node = vm["node"]
     status = vm["status"]
-    type = vm["type"]
+    vm_type = vm["type"]
     try:
         if status != "running":
             print(f"ℹ️ Starting VMID {vmid} on node {node}")
-            if type == "qemu":
+            if vm_type == "qemu":
                 proxmox.nodes(node).qemu(vmid).status.start.post()
                 while proxmox.nodes(node).qemu(vmid).status.current.get()["status"] != "running":
                     sleep(1)
-            elif type == "lxc":
+            if vm_type == "lxc":
                 proxmox.nodes(node).lxc(vmid).status.start.post()
                 while proxmox.nodes(node).lxc(vmid).status.current.get()["status"] != "running":
                     sleep(1)
             else:
-                print(f"❌ Unknown VM type for VMID {vmid}: {type}")
+                print(f"❌ Unknown VM type for VMID {vmid}: {vm_type}")
                 return 1
         else:
             print(f"ℹ️ VMID {vmid} is already running on node {node}")
@@ -126,20 +126,20 @@ def _reboot_vi(proxmox: ProxmoxAPI, vmid: int) -> int:
         return 1
     node = vm["node"]
     status = vm["status"]
-    type = vm["type"]
+    vm_type = vm["type"]
     try:
         if status == "running":
             print(f"ℹ️ Rebooting VMID {vmid} on node {node}")
-            if type == "qemu":
+            if vm_type == "qemu":
                 proxmox.nodes(node).qemu(vmid).status.reboot.post()
                 while proxmox.nodes(node).qemu(vmid).status.current.get()["status"] != "running":
                     sleep(1)
-            elif type == "lxc":
+            if vm_type == "lxc":
                 proxmox.nodes(node).lxc(vmid).status.reset.post()
                 while proxmox.nodes(node).lxc(vmid).status.current.get()["status"] != "running":
                     sleep(1)
             else:
-                print(f"❌ Unknown VM type for VMID {vmid}: {type}")
+                print(f"❌ Unknown VM type for VMID {vmid}: {vm_type}")
                 return 1
     except Exception as exc:
         print(f"❌ Failed to reboot VMID {vmid}: {exc}")
