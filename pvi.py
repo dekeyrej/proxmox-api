@@ -7,10 +7,10 @@ Examples:
         pvi.py check --vmid 101
 
     Create a new VM:
-        pvi.py create --vmid 101 --name myvm --type qemu --image myimage.qcow2
+        pvi.py create qemu --vmid 101 --name myvm --image myimage.qcow2
 
     Modify an existing VM:
-        pvi.py modify --vmid 101 --name newname
+        pvi.py modify qemu --vmid 101 --name newname
 
     Backup a VM:
         pvi.py backup --vmid 101
