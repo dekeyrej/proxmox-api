@@ -70,12 +70,12 @@ def _stop_vi(proxmox: ProxmoxAPI, vmid: int) -> int:
                 proxmox.nodes(node).qemu(vmid).status.stop.post()
                 while proxmox.nodes(node).qemu(vmid).status.current.get()["status"] != "stopped":
                     sleep(1)
-            if vm_type == "lxc":
+            elif vm_type == "lxc":
                 proxmox.nodes(node).lxc(vmid).status.stop.post()
                 while proxmox.nodes(node).lxc(vmid).status.current.get()["status"] != "stopped":
                     sleep(1)
             else:
-                print(f"❌ Unknown VM type for VMID {vmid}: {type}")
+                print(f"❌ Unknown VM type for VMID {vmid}: {vm_type}")
                 return 1
         else:
             print(f"ℹ️ VMID {vmid} is already stopped on node {node}")
@@ -102,7 +102,7 @@ def _start_vi(proxmox: ProxmoxAPI, vmid: int) -> int:
                 proxmox.nodes(node).qemu(vmid).status.start.post()
                 while proxmox.nodes(node).qemu(vmid).status.current.get()["status"] != "running":
                     sleep(1)
-            if vm_type == "lxc":
+            elif vm_type == "lxc":
                 proxmox.nodes(node).lxc(vmid).status.start.post()
                 while proxmox.nodes(node).lxc(vmid).status.current.get()["status"] != "running":
                     sleep(1)
@@ -134,7 +134,7 @@ def _reboot_vi(proxmox: ProxmoxAPI, vmid: int) -> int:
                 proxmox.nodes(node).qemu(vmid).status.reboot.post()
                 while proxmox.nodes(node).qemu(vmid).status.current.get()["status"] != "running":
                     sleep(1)
-            if vm_type == "lxc":
+            elif vm_type == "lxc":
                 proxmox.nodes(node).lxc(vmid).status.reset.post()
                 while proxmox.nodes(node).lxc(vmid).status.current.get()["status"] != "running":
                     sleep(1)

@@ -27,26 +27,27 @@ def _delete_vi(proxmox: ProxmoxAPI, args: argparse.Namespace) -> int:
     vmid = int(args.vmid)
     confirmed = bool(args.yes)
     vm = _vmid_exists(proxmox, vmid)
-    type = vm["type"]
+    vm_type = vm["type"]
     node = vm["node"]
     name = vm["name"]
     if not vm:
         print(f"❌ VMID {vmid} does not exist in the cluster.")
         return 1
     try:
-        if not confirmed and not ask_yes_no(f"Are you sure you want to delete VMID {vmid} (type={type}) on node {node} as '{name}'? [N/y]: ", default=False):
+        if not confirmed and not ask_yes_no(f"Are you sure you want to delete VMID {vmid} (type={vm_type}) on node {node} as '{name}'? [N/y]: ", default=False):
             print(f"❌ Deletion aborted for VMID {vmid}.")
             return 1
         payload = {"purge": 1}  # purge the VM or LXC container
         if _stop_vi(proxmox, vmid) != 0:
             return 1
 
-        if vm["type"] == "qemu":
-            proxmox.nodes(vm["node"]).qemu(vmid).delete(**payload)
-        elif vm["type"] == "lxc":
-            proxmox.nodes(vm["node"]).lxc(vmid).delete(**payload)
+        print(vm_type)
+        if vm_type == "qemu":
+            proxmox.nodes(node).qemu(vmid).delete(**payload)
+        elif vm_type == "lxc":
+            proxmox.nodes(node).lxc(vmid).delete(**payload)
         else:
-            print(f"❌ Unknown VM type for VMID {vmid}: {vm['type']}")
+            print(f"❌ Unknown VM type for VMID {vmid}: {vm_type}")
             return 1
     except Exception as exc:
         print(f"❌ Deletion failed for VMID {vmid}: {exc}")
