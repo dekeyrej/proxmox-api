@@ -37,6 +37,7 @@ DEFAULTS = {
     "sshkeys": os.environ.get("SSHKEYS", "/home/ubuntu/.ssh/authorized_keys"),
     "logical_import_path": os.environ.get("LOGICAL_IMPORT_PATH", "local:import"),
     "logical_template_path": os.environ.get("LOGICAL_TEMPLATE_PATH", "local:vztmpl"),
+    "logical_snippets_path": os.environ.get("LOGICAL_SNIPPETS_PATH", "local:snippets"),
 }
 
 def main(argv: list[str] | None = None) -> int:
@@ -54,6 +55,7 @@ def main(argv: list[str] | None = None) -> int:
         case  "check":
             return  _check_vi(proxmox, args)
         case "create":
+            args.logical_snippets_path = DEFAULTS["logical_snippets_path"]
             return _create_vi(proxmox, args)
         case "modify":
             return _modify_vi(proxmox, args)

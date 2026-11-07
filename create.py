@@ -87,7 +87,7 @@ def _build_qemu_create_payload(args: argparse.Namespace) -> dict[str, Any]:
         "ciupgrade": 0 if args.no_upgrade else 1,
         "ciuser": args.user or _detect_user_from_image(args.image),
         "agent": 1,
-        "cicustom": "vendor=local:snippets/qemu-guest-agent.yaml",
+        "cicustom": f"vendor={args.logical_snippets_path}/qemu-guest-agent.yaml",
         "onboot": 1,
         "serial0": "socket",
         "ipconfig0": ip_string,
