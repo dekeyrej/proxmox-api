@@ -1,5 +1,6 @@
 import argparse
 
+
 def _get_command_line_args(argv, DEFAULTS) -> list[str]:
     """Return the command line arguments as a list of strings."""
     parser = argparse.ArgumentParser(description="Proxmox Virtual Instance (VM or LXC) management via proxmoxer")
@@ -71,7 +72,7 @@ def _get_command_line_args(argv, DEFAULTS) -> list[str]:
     modify_qemu_parser.add_argument("-T", "--machine_type", default="q35", choices=["pc", "q35"], help="new VM Machine type (default q35)") # restart required
     modify_qemu_parser.add_argument("-d", "--display", default="none", choices=["std", "qxl", "virtio", "vmware", "cirrus", "none"], help="new VM Display type (optional)") # restart required
     modify_qemu_parser.add_argument("-P", "--hostpci0", default="", help="new VM Host PCI device (optional)") # restart required
-    modify_lxc_parser = modify_subparsers.add_parser("lxc", help="Modify an existing LXC container", parents=[common_modify_parser])
+    # modify_lxc_parser = modify_subparsers.add_parser("lxc", help="Modify an existing LXC container", parents=[common_modify_parser])
 
     ## backup parser
     backup_parser = main_subparser.add_parser("backup", help="Backup a VM or LXC")

@@ -21,12 +21,12 @@ Examples:
 """
 import os
 
-from command_line import _get_command_line_args
-from  check import _check_vi
-from create import _create_vi
-from modify import _modify_vi
 from backup import _backup_vi
+from check import _check_vi
+from command_line import _get_command_line_args
+from create import _create_vi
 from delete import _delete_vi
+from modify import _modify_vi
 from proxmox_utils import _connect_proxmox
 
 DEFAULTS = {

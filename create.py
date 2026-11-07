@@ -10,6 +10,7 @@ from proxmoxer import ProxmoxAPI
 
 from proxmox_utils import _vmid_exists
 
+
 def _validate_vmid(proxmox: ProxmoxAPI, vmid: int, fallback: bool = False) -> int:
     try:
         if vmid:

@@ -1,7 +1,12 @@
 import argparse
+
 from proxmoxer import ProxmoxAPI
 
-from proxmox_utils import _vmid_exists, _stop_vi
+from proxmox_utils import (
+    _stop_vi,
+    _vmid_exists,
+)
+
 
 def ask_yes_no(prompt="Do you want to continue? [N/y]: ", default=False) -> bool:
     """Ask the user a yes/no question and return True for yes and False for no."""

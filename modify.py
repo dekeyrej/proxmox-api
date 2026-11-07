@@ -3,7 +3,11 @@ from typing import Any
 
 from proxmoxer import ProxmoxAPI
 
-from proxmox_utils import _vmid_exists, _stop_vi, _start_vi, _reboot_vi
+from proxmox_utils import (
+    _reboot_vi,
+    _vmid_exists,
+    )
+
 
 def _get_vi_config(proxmox: ProxmoxAPI, vmid: int) -> dict[str, Any]:
     """Retrieve the current configuration of a VM or container."""
