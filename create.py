@@ -51,6 +51,20 @@ def _detect_user_from_image(image: str) -> str:
         return "arch"
     return "ubuntu"
 
+def _detect_distro_from_image(image: str) -> str:
+    """Detect the Linux distribution based on the image name. 
+    QEMU images often have different distributions depending on the image. 
+    This function checks the image name for known patterns and returns the appropriate distribution.
+    """
+    image = image.lower()
+    if any(x in image for x in ("ubuntu", "jammy", "noble", "resolute")):
+        return "ubuntu"
+    if any(x in image for x in ("debian", "bookworm", "trixie", "forky")):
+        return "debian"
+    if any(x in image for x in ("rocky", "almalinux", "centos", "rhel")):
+        return "rhel"
+    return "ubuntu"
+
 def _read_sshkeys(sshkeys) -> str:
     """Return the SSH public keys as a single string.
 
@@ -72,9 +86,12 @@ def _read_sshkeys(sshkeys) -> str:
 def _build_qemu_create_payload(args: argparse.Namespace) -> dict[str, Any]:
     """Build the payload for creating a QEMU VM."""
     ip_string = f"ip={args.ipaddress}/24,gw={args.gateway}" if args.ipaddress else "ip=dhcp"
+    distro = _detect_distro_from_image(args.image)
+    user = args.user or _detect_user_from_image(args.image)
+    hostname = args.hostname or f"vm-{args.vmid}"
     payload = {
         "vmid": int(args.vmid),
-        "name": args.hostname or f"vm-{args.vmid}",
+        "name": hostname,
         "cores": int(args.cores),
         "memory": int(args.memory),
         "balloon": int(args.memory),
@@ -86,9 +103,9 @@ def _build_qemu_create_payload(args: argparse.Namespace) -> dict[str, Any]:
         "ide2": f"{args.storage_pool}:cloudinit",
         "citype": "nocloud",
         "ciupgrade": 0 if args.no_upgrade else 1,
-        "ciuser": args.user or _detect_user_from_image(args.image),
+        "ciuser": user,
         "agent": 1,
-        "cicustom": f"vendor={args.logical_snippets_path}/qemu-guest-agent.yaml",
+        "cicustom": f"vendor={args.logical_snippets_path}/{distro}-vendor.yaml",
         "onboot": 1,
         "serial0": "socket",
         "ipconfig0": ip_string,
